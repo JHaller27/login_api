@@ -1,10 +1,10 @@
 from typing import Optional
 
-from fastapi import Depends, FastAPI, HTTPException, status, Response
+from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from pydantic import BaseModel
 
-from login import LoginServer, Token, MongoUser
+from login import LoginServer, Token, TokenHandler
 
 import os
 
@@ -17,8 +17,9 @@ mongo_port = int(os.environ.get("MONGO_CONN_PORT", "27017"))
 # to get a SECRET_KEY string, run:
 # openssl rand -hex 32
 secret_key = os.environ.get("JWT_SIGNATURE")
+token_handler = TokenHandler(secret_key, 30)
 
-server = LoginServer(mongo_url, mongo_port, "test", secret_key, token_expire=30)
+server = LoginServer(mongo_url, mongo_port, "test", token_handler)
 
 # endregion MongoDB
 
@@ -47,20 +48,28 @@ class User(BaseModel):
 
 app = FastAPI()
 
-TOKEN_PATH = "token"
+TOKEN_PATH = "token/"
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl=TOKEN_PATH)
 
 
-def get_current_user(token: str = Depends(oauth2_scheme)) -> MongoUser:
-    return server.get_current_user(token)
+def get_current_user(token: str = Depends(oauth2_scheme)) -> str:
+    if user := server.get_current_user(token):
+        return user
+
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
 
 
-def get_current_active_user(login_user: MongoUser = Depends(get_current_user)):
-    user_dict = fake_users_db.get(login_user.user_id)
+def get_current_active_user(user_id: str = Depends(get_current_user)) -> User:
+    user_dict = fake_users_db.get(user_id)
 
     if user_dict is None:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                            detail="User exists in credentials database, but not in domain database")
 
     user_data = User(**user_dict)
 
@@ -72,35 +81,41 @@ def get_current_active_user(login_user: MongoUser = Depends(get_current_user)):
 
 @app.post(f"/{TOKEN_PATH}", response_model=Token)
 async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends()):
-    user = server.authenticate_user(form_data.username, form_data.password)
+    is_authenticated = server.authenticate_user(form_data.username, form_data.password)
 
-    if not user:
+    if not is_authenticated:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect username or password",
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    access_token = server.create_access_token({"sub": user.user_id})
+    access_token = token_handler.create_access_token(form_data.username)
 
-    return Token(access_token=access_token, token_type="bearer")
-
-
-class NewUser(BaseModel):
-    username: str
-    password: str
+    return access_token
 
 
-@app.post("/login/new", status_code=status.HTTP_201_CREATED)
-def new_user(response: Response, created_user: bool = Depends(server.create_user)):
-    if not created_user:
-        response.status_code = status.HTTP_400_BAD_REQUEST
+@app.post("/login/new/", status_code=status.HTTP_201_CREATED)
+def new_user(created_user: str = Depends(server.create_user)):
+    if created_user is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST)
+
+    new_user_obj = User(
+        username=created_user,
+        email=f"{created_user}@fakemail.com",
+        full_name=created_user.title(),
+        disabled=False
+    )
+
+    fake_users_db[created_user] = new_user_obj.dict()
 
 
-@app.delete("/login/delete", status_code=status.HTTP_202_ACCEPTED)
-def delete_user(response: Response, current_user: MongoUser = Depends(get_current_user)):
-    if not server.delete_user(current_user.user_id):
-        response.status_code = status.HTTP_400_BAD_REQUEST
+@app.delete("/login/delete/", status_code=status.HTTP_202_ACCEPTED)
+def delete_user(user_id: str = Depends(get_current_user)):
+    fake_users_db.pop(user_id)
+
+    if not server.delete_user(user_id):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST)
 
 
 @app.get("/users/me/", response_model=User)

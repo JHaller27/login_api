@@ -1,1 +1,2 @@
-from .database import LoginServer, Token, MongoUser
+from .database import LoginServer
+from .tokens import TokenHandler, Token
