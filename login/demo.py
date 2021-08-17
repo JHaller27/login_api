@@ -4,7 +4,7 @@ from fastapi import Depends, FastAPI, HTTPException, status, Response
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from pydantic import BaseModel
 
-from login import LoginServer, Token
+from login import LoginServer, Token, MongoUser
 
 import os
 
@@ -52,14 +52,20 @@ TOKEN_PATH = "token"
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl=TOKEN_PATH)
 
 
-def get_current_active_user(token: str = Depends(oauth2_scheme)):
-    login_user = server.get_current_user(token)
+def get_current_user(token: str = Depends(oauth2_scheme)) -> MongoUser:
+    return server.get_current_user(token)
+
+
+def get_current_active_user(login_user: MongoUser = Depends(get_current_user)):
     user_dict = fake_users_db.get(login_user.user_id)
+
+    if user_dict is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST)
 
     user_data = User(**user_dict)
 
     if user_data is None or user_data.disabled:
-        return None
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST)
 
     return user_data
 
@@ -80,11 +86,20 @@ async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends(
     return Token(access_token=access_token, token_type="bearer")
 
 
-@app.post("/login/new", status_code=status.HTTP_201_CREATED)
-def new_user(response: Response, form_data: OAuth2PasswordRequestForm = Depends()):
-    success = server.create_user(form_data.username, form_data.password)
+class NewUser(BaseModel):
+    username: str
+    password: str
 
-    if not success:
+
+@app.post("/login/new", status_code=status.HTTP_201_CREATED)
+def new_user(response: Response, created_user: bool = Depends(server.create_user)):
+    if not created_user:
+        response.status_code = status.HTTP_400_BAD_REQUEST
+
+
+@app.delete("/login/delete", status_code=status.HTTP_202_ACCEPTED)
+def delete_user(response: Response, current_user: MongoUser = Depends(get_current_user)):
+    if not server.delete_user(current_user.user_id):
         response.status_code = status.HTTP_400_BAD_REQUEST
 
 

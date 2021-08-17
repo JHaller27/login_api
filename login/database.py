@@ -137,7 +137,13 @@ class LoginServer:
         if self.get_user(user_id) is not None:
             return False
 
-        new_user = MongoUser(user_id=user_id, password=password)
+        hashed_pass = self.get_password_hash(password)
+
+        new_user = MongoUser(user_id=user_id, password=hashed_pass)
         self._collection.insert_one(new_user.dict())
 
+        return True
+
+    def delete_user(self, user_id: str) -> bool:
+        self._collection.delete_one({"user_id": user_id})
         return True
