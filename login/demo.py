@@ -9,15 +9,15 @@ from login import LoginServer, Token, TokenHandler
 import os
 
 
-# region MongoDB
-
-mongo_url = os.environ.get("MONGO_CONN_URL", "localhost")
-mongo_port = int(os.environ.get("MONGO_CONN_PORT", "27017"))
-
 # to get a SECRET_KEY string, run:
 # openssl rand -hex 32
 secret_key = os.environ.get("JWT_SIGNATURE")
 token_handler = TokenHandler(secret_key, 30)
+
+# region MongoDB
+
+mongo_url = os.environ.get("MONGO_CONN_URL", "localhost")
+mongo_port = int(os.environ.get("MONGO_CONN_PORT", "27017"))
 
 server = LoginServer(mongo_url, mongo_port, "test", token_handler)
 
