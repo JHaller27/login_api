@@ -46,7 +46,7 @@ class User(BaseModel):
 
 # region FastAPI
 
-app = FastAPI()
+app = FastAPI(title="Custom LoginAPI Demo")
 
 TOKEN_PATH = "token/"
 
